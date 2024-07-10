@@ -20,11 +20,14 @@
           inherit (nix2container) nix2container;
         };
       in
-        rec {
-          packages = {
-            inherit (nix2container) nix2container-bin skopeo-nix2container nix2container;
-            inherit examples tests;
-          };
-          defaultPackage = packages.nix2container-bin;
-        });
+      rec {
+        packages = {
+          inherit (nix2container) nix2container-bin skopeo-nix2container;
+          default = packages.nix2container-bin;
+        };
+        legacyPackages = {
+          inherit (nix2container) nix2container;
+          inherit examples tests;
+        };
+      });
 }
