@@ -5,10 +5,11 @@ let
     image,
     command ? "",
     grepFlags ? "",
+    runFlags ? "",
     pattern,
   }: pkgs.writeScriptBin "test-script" ''
     ${image.copyToPodman}/bin/copy-to-podman
-    ${pkgs.podman}/bin/podman run ${image.imageName}:${image.imageTag} ${command} | ${pkgs.gnugrep}/bin/grep ${grepFlags} '${pattern}'
+    ${pkgs.podman}/bin/podman run ${runFlags} ${image.imageName}:${image.imageTag} ${command} | ${pkgs.gnugrep}/bin/grep ${grepFlags} '${pattern}'
     ret=$?
     if [ $ret -ne 0 ];
     then
@@ -86,6 +87,27 @@ let
       grepFlags = "-Pz";
       pattern = "(?s)\[PASS].*\[PASS].*\[PASS].*drwxr-xr-x \\d+ user user 4096 Jan  1  1970 store";
     };
+    shadow-somebody = testScript {
+      image = examples.shadow-tmp;
+      command = "id";
+      pattern = "uid=1000(somebody) gid=1000(somebody) groups=1000(somebody)";
+    };
+    shadow-root = testScript {
+      image = examples.shadow-tmp;
+      runFlags = "-u root";
+      command = "id";
+      pattern = "uid=0(root) gid=0(root) groups=0(root)";
+    };
+    tmp-stat = testScript {
+      image = examples.shadow-tmp;
+      command = "stat -c %a /tmp";
+      pattern = "1777";
+    };
+    tmp-mktemp = testScript {
+      image = examples.shadow-tmp;
+      command = "mktemp";
+      pattern = "/tmp/tmp.";
+    };
     # Ensure the Nix database is correctly initialized by querying the
     # closure of the Nix binary.
     # The store path is in a dedicated layer
@@ -159,4 +181,3 @@ let
       ${scripts}
     '';
 in tests // { inherit all; }
-

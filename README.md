@@ -269,6 +269,39 @@ Function arguments are:
     building the layer. This is mainly useful to ignore the
     configuration file from the container layer.
 
+### `nix2container.layers.shadow`
+
+Helper to create a layer and quickly customize the users and groups available
+inside the container. [Usage example here](./examples/shadow.nix).
+
+Function arguments:
+
+- **`includeRoot`** (defaults to `false`): enable to add a `root` user (uid 0).
+
+- **`users`** (defaults to `[{uname = "somebody"; uid = 1000;}]`): non-root
+  users configuration. Valid keys are:
+
+  - **`uname`**: user name.
+
+  - **`uid`**: user id, usually something between 1000 and 3000.
+
+  - **`gname`** (defaults to the same as `uname`): main group name.
+
+  - **`gid`** (defaults to the same as `gid`): main group id.
+
+  - **`home`** (defaults to `/home/${uname}`): user's home dir. It will
+    belong to `uname` and `gname`, with mode `u=rwx,g=rx,o=`.
+
+  - **`shell`** (defaults to `pkgs.runtimeShell`): user's shell.
+
+  - **`extraGroups`** (defaults to `[]`): list of attrsets with extra
+    groups to create in the image and add to the user. Valid keys are `gid`
+    (optional) and `gname`.
+
+### `nix2container.layers.tmp`
+
+This prebuilt layer will help you to add a working `/tmp` dir to your image.
+[Usage example here](./examples/tmp.nix).
 
 ## Isolate dependencies in dedicated layers
 

@@ -1,4 +1,4 @@
-{ pkgs ? import <nixpkgs> { }, system }:
+{ pkgs ? import <nixpkgs> { }, system ? pkgs.system }:
 let
   l = pkgs.lib // builtins;
 
@@ -478,8 +478,108 @@ let
         pkgs.lib.throwIf (contents != null && copyToRoot != null)
         "You can not specify both contents and copyToRoot."
         ;
-in
-{
+
+  # Similar to dockerTools.shadowSetup, but simpler to integrate here
+  layers.shadow = {
+    # Enable to include a root user in the container
+    includeRoot ? false,
+    # List of users attrsets. Valid keys: see addUser.
+    users ? [
+      {
+        uname = "somebody";
+        uid = 1000;
+      }
+    ],
+  }: let
+    rootUser = {
+      uname = "root";
+      uid = 0;
+      home = "/root";
+    };
+    addGroup = {
+      gname,
+      gid ? null,
+    }: let
+      gidFlag = l.optionalString (gid != null) "-g ${l.toString gid}";
+    in ''
+      groupadd -P $out ${gidFlag} ${gname}
+    '';
+    addUser = {
+      extraGroups ? [], # List of attrsets. Valid keys: see addGroup.
+      gid ? uid,
+      gname ? uname,
+      home ? "/home/${uname}",
+      shell ? pkgs.runtimeShell,
+      uid,
+      uname,
+    }: let
+      eG =
+        l.optionalString (l.length extraGroups > 0)
+        "-G ${l.concatStringsSep "," extraGroups}";
+      allGroups = [{inherit gname gid;}] ++ extraGroups;
+      addAllGroups = l.concatMapStrings addGroup allGroups;
+    in ''
+      ${addAllGroups}
+      useradd -P $out -u ${l.toString uid} -g ${l.toString gid} -Md ${home} -s ${shell} ${eG} ${uname}
+      mkdir -p $out${home}
+    '';
+    allUsers = l.optionals includeRoot [rootUser] ++ users;
+    shadowSetup =
+      pkgs.runCommand "shadow-setup" {
+        nativeBuildInputs = [pkgs.shadow];
+      } ''
+        mkdir -p $out/etc/pam.d
+        touch $out/etc/login.defs $out/etc/passwd $out/etc/group
+
+        cat > $out/etc/pam.d/other <<EOF
+        account sufficient pam_unix.so
+        auth sufficient pam_rootok.so
+        password requisite pam_unix.so nullok yescrypt
+        session required pam_unix.so
+        EOF
+
+        ${l.concatMapStrings addUser allUsers}
+      '';
+    userPerms = {
+      gid ? uid,
+      gname ? uname,
+      home ? "/home/${uname}",
+      uid,
+      uname,
+      ...
+    }: {
+      inherit gid gname uid uname;
+      mode = "u=rwx,g=rx,o=";
+      regex = home;
+    };
+  in
+    buildLayer {
+      copyToRoot = shadowSetup;
+      perms = l.forEach allUsers userPerms;
+    };
+
+  layers.tmp = buildLayer {
+    copyToRoot = pkgs.runCommand "tmp-dir" {
+      outputHash = "sha256-AVwrjJdGCmzJ8JlT6x69JkHlFlRvOJ4hcqNt10YNoAU=";
+      outputHashAlgo = "sha256";
+      outputHashMode = "recursive";
+      preferLocalBuild = true;
+    } ''
+      mkdir -p $out/tmp
+    '';
+    perms = [
+      { path = "/tmp"; regex = ".*"; mode = "a=rwxt"; }
+    ];
+  };
+in {
   inherit nix2container-bin skopeo-nix2container;
-  nix2container = { inherit buildImage buildLayer pullImage pullImageFromManifest; };
+  nix2container = {
+    inherit
+      buildImage
+      buildLayer
+      pullImage
+      pullImageFromManifest
+      layers
+      ;
+  };
 }
