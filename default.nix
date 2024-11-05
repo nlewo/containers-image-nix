@@ -128,6 +128,8 @@ let
         nativeBuildInputs = l.singleton pkgs.skopeo;
         SSL_CERT_FILE = "${pkgs.cacert.out}/etc/ssl/certs/ca-bundle.crt";
 
+        XDG_RUNTIME_DIR = TMPDIR;
+
         sourceURL = "docker://${imageName}@${imageDigest}";
       } ''
       skopeo \
