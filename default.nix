@@ -51,6 +51,7 @@ let
       mkdir -p vendor/github.com/nlewo/nix2container/
       cp -r ${nix2container-bin.src}/* vendor/github.com/nlewo/nix2container/
       cd vendor/github.com/containers/image/v5
+      substituteInPlace copy/copy.go --replace 'maxParallelDownloads = uint(6)' 'maxParallelDownloads = uint(64)'
       mkdir nix/
       touch nix/transport.go
       # The patch for alltransports.go does not apply cleanly to skopeo > 1.14,
