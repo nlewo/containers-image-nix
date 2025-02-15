@@ -383,6 +383,8 @@ let
     copyToRoot ? null,
     # An image that is used as base image of this image.
     fromImage ? "",
+    # Image architecture
+    arch ? pkgs.go.GOARCH,
     # A list of file permisssions which are set when the tar layer is
     # created: these permissions are not written to the Nix store.
     #
@@ -460,6 +462,7 @@ let
         layers = layers;
       };
       fromImageFlag = l.optionalString (fromImage != "") "--from-image ${fromImage}";
+      archFlag = "--arch ${arch}";
       createdFlag = "--created ${created}";
       layerPaths = l.concatMapStringsSep " " (l: l + "/layers.json") (layers ++ [customizationLayer]);
       image = let
@@ -488,6 +491,7 @@ let
         ${nix2container-bin}/bin/nix2container image \
         $out \
         ${fromImageFlag} \
+        ${archFlag} \
         ${createdFlag} \
         ${configFile} \
         ${layerPaths}
