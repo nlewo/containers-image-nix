@@ -2,7 +2,7 @@
 let
   l = pkgs.lib // builtins;
 
-  nix2container-bin = pkgs.buildGoModule rec {
+  nix2container-bin = { stdenv, buildGoModule }: buildGoModule {
     pname = "nix2container";
     version = "1.0.0";
     src = l.cleanSourceWith {
@@ -20,21 +20,21 @@ let
       );
     };
     vendorHash = "sha256-/j4ZHOwU5Xi8CE/fHha+2iZhsLd/y2ovzVhvg8HDV78=";
-    ldflags = pkgs.lib.optionals pkgs.stdenv.isDarwin [
+    ldflags = l.optionals stdenv.isDarwin [
       "-X github.com/nlewo/nix2container/nix.useNixCaseHack=true"
     ];
   };
 
-  skopeo-nix2container = pkgs.skopeo.overrideAttrs (old: {
-    EXTRA_LDFLAGS = pkgs.lib.optionalString pkgs.stdenv.isDarwin "-X github.com/nlewo/nix2container/nix.useNixCaseHack=true";
-    nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.patchutils ];
+  skopeo-nix2container = { stdenv, skopeo, fetchpatch2, patchutils, nix2container-bin }: skopeo.overrideAttrs (old: {
+    EXTRA_LDFLAGS = l.optionalString stdenv.isDarwin "-X github.com/nlewo/nix2container/nix.useNixCaseHack=true";
+    nativeBuildInputs = old.nativeBuildInputs ++ [ patchutils ];
     preBuild = let
       # Needs to use fetchpatch2 to handle "git extended headers", which include
       # lines with semantic content like "rename from" and "rename to".
       # However, it also includes "index" lines which include the git revision(s) the patch was initially created from.
       # These lines may include revisions of differing length, based on how Github generates them.
       # fetchpatch2 does not filter out, but probably should    
-      fetchgitpatch = args: pkgs.fetchpatch2 (args // {
+      fetchgitpatch = args: fetchpatch2 (args // {
         postFetch = (args.postFetch or "") + ''
           sed -i \
             -e '/^index /d' \
@@ -61,28 +61,28 @@ let
     '';
   });
 
-  writeSkopeoApplication = name: text: pkgs.writeShellApplication {
+  writeSkopeoApplication = { writeShellApplication, jq, skopeo-nix2container }: name: text: writeShellApplication {
     inherit name text;
-    runtimeInputs = [ pkgs.jq skopeo-nix2container ];
+    runtimeInputs = [ jq skopeo-nix2container ];
     excludeShellChecks = [ "SC2068" ];
   };
 
-  copyToDockerDaemon = image: writeSkopeoApplication "copy-to-docker-daemon" ''
+  copyToDockerDaemon = { writeSkopeoApplication }: image: writeSkopeoApplication "copy-to-docker-daemon" ''
     echo "Copy to Docker daemon image ${image.imageName}:${image.imageTag}"
     skopeo --insecure-policy copy nix:${image} docker-daemon:${image.imageName}:${image.imageTag} $@
   '';
 
-  copyToRegistry = image: writeSkopeoApplication "copy-to-registry" ''
+  copyToRegistry = { writeSkopeoApplication }: image: writeSkopeoApplication "copy-to-registry" ''
     echo "Copy to Docker registry image ${image.imageName}:${image.imageTag}"
     skopeo --insecure-policy copy nix:${image} docker://${image.imageName}:${image.imageTag} $@
   '';
 
-  copyTo = image: writeSkopeoApplication "copy-to" ''
+  copyTo = { writeSkopeoApplication }: image: writeSkopeoApplication "copy-to" ''
     echo Running skopeo --insecure-policy copy nix:${image} $@
     skopeo --insecure-policy copy nix:${image} $@
   '';
 
-  copyToPodman = image: writeSkopeoApplication "copy-to-podman" ''
+  copyToPodman = { writeSkopeoApplication }: image: writeSkopeoApplication "copy-to-podman" ''
     echo "Copy to podman image ${image.imageName}:${image.imageTag}"
     skopeo --insecure-policy copy nix:${image} containers-storage:${image.imageName}:${image.imageTag}
     skopeo --insecure-policy inspect containers-storage:${image.imageName}:${image.imageTag}
@@ -102,7 +102,7 @@ let
   # Now, bind mount the file into the nix build sandbox
   # extra-sandbox-paths = /etc/skopeo/auth.json=/etc/nix/skopeo/auth.json
   # update /etc/nix/skopeo/auth.json every time you add a new registry auth
-  pullImage =
+  pullImage = { runCommand, go, skopeo, cacert, nix2container-bin }:
     let
       fixName = name: l.replaceStrings [ "/" ":" ] [ "-" "-" ] name;
     in
@@ -112,12 +112,12 @@ let
     , imageDigest
     , sha256
     , os ? "linux"
-    , arch ? pkgs.go.GOARCH
+    , arch ? go.GOARCH
     , tlsVerify ? true
     , name ? fixName "docker-image-${imageName}"
     }: let
       authFile = "/etc/skopeo/auth.json";
-      dir = pkgs.runCommand name
+      dir = runCommand name
       {
         inherit imageDigest;
         impureEnvVars = l.fetchers.proxyImpureEnvVars;
@@ -125,8 +125,8 @@ let
         outputHashAlgo = "sha256";
         outputHash = sha256;
 
-        nativeBuildInputs = l.singleton pkgs.skopeo;
-        SSL_CERT_FILE = "${pkgs.cacert.out}/etc/ssl/certs/ca-bundle.crt";
+        nativeBuildInputs = l.singleton skopeo;
+        SSL_CERT_FILE = "${cacert.out}/etc/ssl/certs/ca-bundle.crt";
 
         sourceURL = "docker://${imageName}@${imageDigest}";
       } ''
@@ -148,18 +148,18 @@ let
         "dir://$out" \
         | cat  # pipe through cat to force-disable progress bar
       '';
-    in pkgs.runCommand "nix2container-${imageName}.json" { } ''
-      ${nix2container-bin}/bin/nix2container image-from-dir $out ${dir}
-    '';
+    in runCommand "nix2container-${imageName}.json"
+      { nativeBuildInputs = [ nix2container-bin ]; }
+      "nix2container image-from-dir $out ${dir}";
 
-  pullImageFromManifest =
+  pullImageFromManifest = { runCommand, writeText, go, cacert, curl, jq, nix2container-bin, selfBuildHost }: 
     { imageName
     , imageManifest ? null
     # The manifest dictates what is pulled; these three are only used for
     # the supplied manifest-pulling script.
     , imageTag ? "latest"
     , os ? "linux"
-    , arch ? pkgs.go.GOARCH
+    , arch ? go.GOARCH
     , tlsVerify ? true
     , registryUrl ? "registry.hub.docker.com"
     , meta ? {}
@@ -171,22 +171,23 @@ let
           blobUrl = "https://${registryUrl}/v2/${imageName}/blobs/${digest}";
           plainDigest = l.replaceStrings ["sha256:"] [""] digest;
           insecureFlag = l.strings.optionalString (!tlsVerify) "--insecure";
-        in pkgs.runCommand plainDigest {
+        in runCommand plainDigest {
+          nativeBuildInputs = [ curl jq ];
           outputHash = plainDigest;
           outputHashMode = "flat";
           outputHashAlgo = "sha256";
         } ''
-          SSL_CERT_FILE="${pkgs.cacert.out}/etc/ssl/certs/ca-bundle.crt";
+          SSL_CERT_FILE="${cacert.out}/etc/ssl/certs/ca-bundle.crt";
 
           # This initial access is expected to fail as we don't have a token.
-          ${pkgs.curl}/bin/curl --location ${insecureFlag} "${blobUrl}" --head --silent --write-out '%header{www-authenticate}' --output /dev/null > bearer.txt
+          curl --location ${insecureFlag} "${blobUrl}" --head --silent --write-out '%header{www-authenticate}' --output /dev/null > bearer.txt
           tokenUrl=$(sed -n 's/Bearer realm="\(.*\)",service="\(.*\)",scope="\(.*\)"/\1?service=\2\&scope=\3/p' bearer.txt)
 
           declare -a auth_args
           if [ -n "$tokenUrl" ]; then
             echo "Token URL: $tokenUrl"
-            ${pkgs.curl}/bin/curl --location ${insecureFlag} --fail --silent "$tokenUrl" --output token.json
-            token="$(${pkgs.jq}/bin/jq --raw-output .token token.json)"
+            curl --location ${insecureFlag} --fail --silent "$tokenUrl" --output token.json
+            token="$(jq --raw-output .token token.json)"
             auth_args=(-H "Authorization: Bearer $token")
           else
             echo "No token URL found, trying without authentication"
@@ -194,7 +195,7 @@ let
           fi
 
           echo "Blob URL: ${blobUrl}"
-          ${pkgs.curl}/bin/curl ${insecureFlag} --fail "''${auth_args[@]}" "${blobUrl}" --location --output $out
+          curl ${insecureFlag} --fail "''${auth_args[@]}" "${blobUrl}" --location --output $out
         '';
 
       # Pull the blobs (archives) for all layers, as well as the one for the image's config JSON.
@@ -203,11 +204,11 @@ let
 
       # Write the blob map out to a JSON file for the GO executable to consume.
       blobMap = l.listToAttrs(map (drv: { name = drv.name; value = drv; }) (layerBlobs ++ [configBlob]));
-      blobMapFile = pkgs.writeText "${imageName}-blobs.json" (l.toJSON blobMap);
+      blobMapFile = writeText "${imageName}-blobs.json" (l.toJSON blobMap);
 
       # Convenience scripts for manifest-updating.
       filter = ''.manifests[] | select((.platform.os=="${os}") and (.platform.architecture=="${arch}")) | .digest'';
-      getManifest = writeSkopeoApplication "get-manifest" ''
+      getManifest = selfBuildHost.writeSkopeoApplication "get-manifest" ''
         set -e
         manifest=$(skopeo inspect docker://${registryUrl}/${imageName}:${imageTag} --raw | jq)
         if echo "$manifest" | jq -e .manifests >/dev/null; then
@@ -220,11 +221,11 @@ let
         fi
       '';
 
-    in pkgs.runCommand "nix2container-${imageName}.json" { passthru = { inherit getManifest; }; } ''
-      ${nix2container-bin}/bin/nix2container image-from-manifest $out ${imageManifest} ${blobMapFile}
-    '';
+    in runCommand "nix2container-${imageName}.json"
+      { nativeBuildInputs = [ nix2container-bin ]; passthru = { inherit getManifest; }; }
+      "nix2container image-from-manifest $out ${imageManifest} ${blobMapFile}";
 
-  buildLayer = {
+  buildLayer = { runCommand, writeText, closureGraph, nix2container-bin }: {
     # A list of store paths to include in the layer.
     deps ? [],
     # A derivation (or list of derivations) to include in the layer
@@ -280,17 +281,17 @@ let
 	    regex = "^${p}";
 	    repl = "";
     }) copyToRootList;
-    rewritesFile = pkgs.writeText "rewrites.json" (l.toJSON rewrites);
+    rewritesFile = writeText "rewrites.json" (l.toJSON rewrites);
     rewritesFlag = "--rewrites ${rewritesFile}";
-    permsFile = pkgs.writeText "perms.json" (l.toJSON perms);
+    permsFile = writeText "perms.json" (l.toJSON perms);
     permsFlag = l.optionalString (perms != []) "--perms ${permsFile}";
     historyFile = pkgs.writeText "history.json" (l.toJSON metadata);
     historyFlag = l.optionalString (metadata != {}) "--history ${historyFile}";
     allDeps = deps ++ copyToRootList;
     tarDirectory = l.optionalString (! reproducible) "--tar-directory $out";
-    layersJSON = pkgs.runCommand "layers.json" {} ''
+    layersJSON = runCommand "layers.json" { nativeBuildInputs = [ nix2container-bin ]; } ''
       mkdir $out
-      ${nix2container-bin}/bin/nix2container ${subcommand} \
+      nix2container ${subcommand} \
         $out/layers.json \
         ${closureGraph allDeps ignore} \
         --max-layers ${toString maxLayers} \
@@ -304,21 +305,20 @@ let
 
   # Create a nix database from all paths contained in the given closureGraphJson.
   # Also makes all these paths store roots to prevent them from being garbage collected.
-  makeNixDatabase = closureGraphJson:
+  makeNixDatabase = { runCommand, jq, nix, sqlite }: closureGraphJson:
     assert l.isDerivation closureGraphJson;
-    pkgs.runCommand "nix-database" {}''
+    runCommand "nix-database" { nativeBuildInputs = [ jq nix sqlite ]; } ''
       mkdir $out
       echo "Generating the nix database from ${closureGraphJson}..."
       export NIX_REMOTE=local?root=$PWD
       # A user is required by nix
       # https://github.com/NixOS/nix/blob/9348f9291e5d9e4ba3c4347ea1b235640f54fd79/src/libutil/util.cc#L478
       export USER=nobody
-      export PATH=${pkgs.jq.bin}/bin:${pkgs.sqlite}/bin:"$PATH"
       # Avoid including the closureGraph derivation itself.
       # Transformation taken from https://github.com/NixOS/nixpkgs/blob/e7f49215422317c96445e0263f21e26e0180517e/pkgs/build-support/closure-info.nix#L33
       jq -r 'map([.path, .narHash, .narSize, "", (.references | length)] + .references) | add | map("\(.)\n") | add' ${closureGraphJson} \
         | head -n -1 \
-        | ${pkgs.nix}/bin/nix-store --load-db -j 1
+        | nix-store --load-db -j 1
 
       # Sanitize time stamps
       sqlite3 $PWD/nix/var/nix/db/db.sqlite \
@@ -337,18 +337,18 @@ let
     '';
 
   # Write the references of `path' to a file but do not include `ignore' itself if non-null.
-  closureGraph = paths: ignore:
+  closureGraph = { runCommand, pkgsBuildHost }: paths: ignore:
     let ignoreList =
       if ignore == null
       then []
       else if !(builtins.isList ignore)
       then [ignore]
       else ignore;
-    in pkgs.runCommand "closure-graph.json"
+    in runCommand "closure-graph.json"
     {
       exportReferencesGraph.graph = paths;
       __structuredAttrs = true;
-      PATH = "${pkgs.jq}/bin";
+      PATH = "${pkgsBuildHost.jq}/bin";
       ignoreListJson = builtins.toJSON (builtins.map builtins.toString ignoreList);
       outputChecks.out = {
         disallowedReferences = ignoreList;
@@ -364,7 +364,7 @@ let
     }
     "";
 
-  buildImage = {
+  buildImage = { runCommand, writeText, go, buildLayer, closureGraph, makeNixDatabase, nix2container-bin, selfBuildHost }: {
     name,
     # Image tag, when null then the nix output hash will be used.
     tag ? null,
@@ -416,7 +416,7 @@ let
     meta ? {},
   }:
     let
-      configFile = pkgs.writeText "config.json" (l.toJSON config);
+      configFile = writeText "config.json" (l.toJSON config);
       copyToRootList =
         let derivations = if !isNull contents then contents else copyToRoot;
         in if isNull derivations
@@ -460,6 +460,7 @@ let
         layers = layers;
       };
       fromImageFlag = l.optionalString (fromImage != "") "--from-image ${fromImage}";
+      archFlag = "--arch ${go.GOARCH}";
       createdFlag = "--created ${created}";
       layerPaths = l.concatMapStringsSep " " (l: l + "/layers.json") (layers ++ [customizationLayer]);
       image = let
@@ -469,25 +470,27 @@ let
           then tag
           else
           l.head (l.strings.splitString "-" (baseNameOf image.outPath));
-      in pkgs.runCommand "image-${baseNameOf name}.json"
+      in runCommand "image-${baseNameOf name}.json"
       {
         inherit imageName meta;
+        nativeBuildInputs = [ nix2container-bin ];
         passthru = {
           inherit fromImage imageTag;
           # provide a cheap to evaluate image reference for use with external tools like docker
           # DO NOT use as an input to other derivations, as there is no guarantee that the image
           # reference will exist in the store.
           imageRefUnsafe = builtins.unsafeDiscardStringContext "${imageName}:${imageTag}";
-          copyToDockerDaemon = copyToDockerDaemon image;
-          copyToRegistry = copyToRegistry image;
-          copyToPodman = copyToPodman image;
-          copyTo = copyTo image;
+          copyToDockerDaemon = selfBuildHost.copyToDockerDaemon image;
+          copyToRegistry = selfBuildHost.copyToRegistry image;
+          copyToPodman = selfBuildHost.copyToPodman image;
+          copyTo = selfBuildHost.copyTo image;
         };
       }
       ''
-        ${nix2container-bin}/bin/nix2container image \
+        nix2container image \
         $out \
         ${fromImageFlag} \
+        ${archFlag} \
         ${createdFlag} \
         ${configFile} \
         ${layerPaths}
@@ -495,13 +498,47 @@ let
     in checked { inherit copyToRoot contents; } image;
 
     checked = { copyToRoot, contents }:
-      pkgs.lib.warnIf (contents != null)
+      l.warnIf (contents != null)
         "The contents parameter is deprecated. Change to copyToRoot if the contents are designed to be copied to the root filesystem, such as when you use `buildEnv` or similar between contents and your packages. Use copyToRoot = buildEnv { ... }; or similar if you intend to add packages to /bin."
-        pkgs.lib.throwIf (contents != null && copyToRoot != null)
+        l.throwIf (contents != null && copyToRoot != null)
         "You can not specify both contents and copyToRoot."
         ;
+
+    scopeFn = self: {
+      nix2container-bin = self.callPackage nix2container-bin { };
+      skopeo-nix2container = self.callPackage skopeo-nix2container { };
+
+      buildImage = self.callPackage buildImage { };
+      buildLayer = self.callPackage buildLayer { };
+      pullImage = self.callPackage pullImage { };
+      pullImageFromManifest = self.callPackage pullImageFromManifest { };
+
+      closureGraph = self.callPackage closureGraph { };
+      copyTo = self.callPackage copyTo { };
+      copyToDockerDaemon = self.callPackage copyToDockerDaemon { };
+      copyToPodman = self.callPackage copyToPodman { };
+      copyToRegistry = self.callPackage copyToRegistry { };
+      makeNixDatabase = self.callPackage makeNixDatabase { };
+      writeSkopeoApplication = self.callPackage writeSkopeoApplication { };
+
+      inherit (otherSplices) selfBuildBuild selfBuildHost selfBuildTarget selfHostHost selfHostTarget selfTargetTarget;
+    };
+
+    otherSplices = {
+      selfBuildBuild = l.makeScope pkgs.pkgsBuildBuild.newScope scopeFn;
+      selfBuildHost = l.makeScope pkgs.pkgsBuildHost.newScope scopeFn;
+      selfBuildTarget = l.makeScope pkgs.pkgsBuildTarget.newScope scopeFn;
+      selfHostHost = l.makeScope pkgs.pkgsHostHost.newScope scopeFn;
+      selfHostTarget = l.makeScope pkgs.pkgsHostTarget.newScope scopeFn;
+      selfTargetTarget = l.optionalAttrs (pkgs.pkgsTargetTarget?newScope) (l.makeScope pkgs.pkgsTargetTarget.newScope scopeFn);
+    };
+
+    scope = pkgs.makeScopeWithSplicing' {
+      f = scopeFn;
+      inherit otherSplices;
+    };
 in
 {
-  inherit nix2container-bin skopeo-nix2container;
-  nix2container = { inherit buildImage buildLayer pullImage pullImageFromManifest; };
+  inherit (scope) nix2container-bin skopeo-nix2container;
+  nix2container = { inherit (scope) buildImage buildLayer pullImage pullImageFromManifest; };
 }
