@@ -11,7 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func getPaths(storePaths []string, parents []types.Layer, rewrites []types.RewritePath, exclude string, permPaths []types.PermPath) types.Paths {
+func getPaths(storePaths []string, parents []types.Layer, rewrites []types.RewritePath, exclude string, permPaths []types.PermPath, capPaths []types.CapabilityPath) types.Paths {
 	var paths types.Paths
 	for _, p := range storePaths {
 		path := types.Path{
@@ -35,6 +35,19 @@ func getPaths(storePaths []string, parents []types.Layer, rewrites []types.Rewri
 		}
 		if perms != nil {
 			pathOptions.Perms = perms
+		}
+		var caps []types.Capability
+		for _, cap := range capPaths {
+			if p == cap.Path {
+				hasPathOptions = true
+				caps = append(caps, types.Capability{
+					Regex: cap.Regex,
+					Caps:  cap.Caps,
+				})
+			}
+		}
+		if caps != nil {
+			pathOptions.Capabilities = caps
 		}
 		for _, rewrite := range rewrites {
 			if p == rewrite.Path {
@@ -105,13 +118,13 @@ func newLayers(paths types.Paths, tarDirectory string, maxLayers int, history v1
 	return layers, nil
 }
 
-func NewLayers(storePaths []string, maxLayers int, parents []types.Layer, rewrites []types.RewritePath, exclude string, perms []types.PermPath, history v1.History) ([]types.Layer, error) {
-	paths := getPaths(storePaths, parents, rewrites, exclude, perms)
+func NewLayers(storePaths []string, maxLayers int, parents []types.Layer, rewrites []types.RewritePath, exclude string, perms []types.PermPath, caps []types.CapabilityPath, history v1.History) ([]types.Layer, error) {
+	paths := getPaths(storePaths, parents, rewrites, exclude, perms, caps)
 	return newLayers(paths, "", maxLayers, history)
 }
 
-func NewLayersNonReproducible(storePaths []string, maxLayers int, tarDirectory string, parents []types.Layer, rewrites []types.RewritePath, exclude string, perms []types.PermPath, history v1.History) (layers []types.Layer, err error) {
-	paths := getPaths(storePaths, parents, rewrites, exclude, perms)
+func NewLayersNonReproducible(storePaths []string, maxLayers int, tarDirectory string, parents []types.Layer, rewrites []types.RewritePath, exclude string, perms []types.PermPath, caps []types.CapabilityPath, history v1.History) (layers []types.Layer, err error) {
+	paths := getPaths(storePaths, parents, rewrites, exclude, perms, caps)
 	return newLayers(paths, tarDirectory, maxLayers, history)
 }
 

@@ -73,6 +73,26 @@ func createDirectory(tw *tar.Writer, path string) error {
 	return nil
 }
 
+// Version 3 capability format
+// struct vfs_cap_data {
+//     __le32 magic_etc;            /* magic, version and flags */
+//     struct {
+//         __le32 permitted;        /* permitted capabilities */
+//         __le32 inheritable;      /* inheritable capabilities */
+//     } data[2];                   /* realistically, one is enough */
+//     __le32 effective;            /* effective capabilities */
+// };
+type vfsNsCapData struct {
+	MagicEtc uint32
+	Data     [2]struct {
+		Permitted   uint32
+		Inheritable uint32
+	}
+	Effective uint32
+}
+
+const vfsCapRevision3 = 0x03000000
+
 func appendFileToTar(tw *tar.Writer, srcPath, dstPath string, info os.FileInfo, opts *types.PathOptions) error {
 	var link string
 	var err error
@@ -121,6 +141,31 @@ func appendFileToTar(tw *tar.Writer, srcPath, dstPath string, info os.FileInfo, 
 					if err != nil {
 						return err
 					}
+				}
+			}
+		}
+
+
+		// Handle capabilities if defined
+		if len(opts.Capabilities) > 0 {
+			// Initialize PAXRecords if nil
+			if hdr.PAXRecords == nil {
+				hdr.PAXRecords = make(map[string]string)
+			}
+
+			for _, cap := range opts.Capabilities {
+				re := regexp.MustCompile(cap.Regex)
+				if re.Match([]byte(srcPath)) {
+					logrus.Infof("Regex matches!: %s path: %s", cap.Regex, srcPath)
+
+					data := NewVFSCapData(uint32(1 << CAP_NET_BIND_SERVICE), uint32(1 << CAP_NET_BIND_SERVICE), true, 0)
+
+					logrus.Infof("capabilities data: %v", data)
+
+					capBytes := data.ToBytes()
+					logrus.Infof("cap bytes: %v hex: %s", capBytes, string(capBytes))
+
+					hdr.PAXRecords["SCHILY.xattr.security.capability"] = string(capBytes)
 				}
 			}
 		}

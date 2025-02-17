@@ -21,6 +21,18 @@ func readPermsFile(filename string) (permPaths []types.PermPath, err error) {
 	return
 }
 
+func readCapsFile(filename string) (capsPaths []types.CapabilityPath, err error) {
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		return capsPaths, err
+	}
+	err = json.Unmarshal(content, &capsPaths)
+	if err != nil {
+		return capsPaths, err
+	}
+	return
+}
+
 func readRewritesFile(filename string) (rewritePaths []types.RewritePath, err error) {
 	content, err := os.ReadFile(filename)
 	if err != nil {

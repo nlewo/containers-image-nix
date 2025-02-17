@@ -60,9 +60,21 @@ type PermPath struct {
 	Gname string `json:"gname"`
 }
 
+type Capability struct {
+	Regex string   `json:"regex"`
+	Caps  []string `json:"caps"`
+}
+
+type CapabilityPath struct {
+	Path  string 	 `json:"path"`
+	Regex string   `json:"regex"`
+	Caps  []string `json:"caps"`
+}
+
 type PathOptions struct {
 	Rewrite Rewrite `json:"rewrite,omitempty"`
 	Perms   []Perm  `json:"perms,omitempty"`
+	Capabilities []Capability `json:"capabilities,omitempty"`
 }
 
 type Path struct {
