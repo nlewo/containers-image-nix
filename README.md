@@ -314,6 +314,60 @@ and a second layer containing the script only.
 In real life, the isolated layer can contains a Python environment or
 Node modules.
 
+Keep in mind that each layer will only be able to strip out nix store paths
+that exist in their _child_ layers (because layers can contain layers), not in
+their _sibling_ layers. So, if you did it like this, chances are that there
+were some repeated nix store paths between layers 1 and 2. In that case, you
+must choose between optimizing image cache or image size:
+
+```nix
+{ pkgs }:
+let
+  application = pkgs.writeScript "conversation" ''
+    ${pkgs.hello}/bin/hello
+    echo "Haaa aa... I'm dying!!!"
+  '';
+  layer1 = pkgs.nix2container.buildLayer { deps = [pkgs.bash]; };
+  layer2 = pkgs.nix2container.buildLayer { deps = [pkgs.hello]; };
+in
+pkgs.nix2container.buildImage {
+  name = "hello";
+  config = {
+    entrypoint = ["${pkgs.bash}/bin/bash" application];
+  };
+  # These layers might duplicate a store path
+  layers = [layer1 layer2];
+}
+```
+
+If you have many layers and you want to control their splitting manually, but
+still avoid duplicating data, you can just fold them:
+
+```nix
+{ lib, pkgs }:
+let
+  application = pkgs.writeScript "conversation" ''
+    ${pkgs.hello}/bin/hello
+    echo "Haaa aa... I'm dying!!!"
+  '';
+in
+pkgs.nix2container.buildImage {
+  name = "hello";
+  config = {
+    entrypoint = ["${pkgs.bash}/bin/bash" application];
+  };
+  # Folding layers to avoid duplicating store paths
+  layers = lib.foldl
+    (acc: current:
+      [(pkgs.nix2container.buildLayer (current // {layers = acc;}))])
+    []
+    [
+      {deps = [pkgs.bash]}
+      {deps = [pkgs.hello]}
+    ];
+}
+```
+
 See
 [Nix & Docker: Layer explicitly without duplicate packages!](https://blog.eigenvalue.net/2023-nix2container-everything-once/)
 for learning how to avoid duplicate store paths in your explicitly layered
