@@ -1,0 +1,13 @@
+name: "Build packages on darwin"
+on:
+  pull_request:
+  push:
+    branches:
+      - 'master'
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4.2.2
+    - uses: cachix/install-nix-action@v30
+    - run: nix build -L .#nix2container-bin .#skopeo-nix2container 
